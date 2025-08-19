@@ -1,7 +1,7 @@
 {
   "name": "com.littlebitgames.iapmodule",
   "displayName": "In App Module",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "unity": "2021.1",
   "unityRelease": "6f1",
   "description": "This module provides you with Unity In App Service",
@@ -10,6 +10,6 @@
     "name": "LittleBitGames"
   },
   "dependencies": {
-    "com.unity.purchasing": "4.12.0"
+    "com.unity.purchasing": "5.0.0"
   }
 }
