@@ -1,5 +1,4 @@
-﻿using System;
-using System.Globalization;
+﻿using System.Linq;
 using UnityEngine;
 using UnityEngine.Purchasing;
 
@@ -7,13 +6,20 @@ namespace LittleBit.Modules.IAppModule.Data.ProductWrappers
 {
     public class RuntimeProductWrapper : ProductWrapper
     {
-        public RuntimeProductWrapper(Product product)
+        private readonly StoreController _controller;
+
+
+        public RuntimeProductWrapper(Product product, StoreController controller)
         {
+            _controller = controller;
+
+            Definition = new() { Id = product.definition.id, Type = product.definition.type };
+
             TransactionData = new()
             {
-                HasReceiptGetter = () => product.hasReceipt,
-                ReceiptGetter = () => product.receipt,
-                TransactionIdGetter = () => product.transactionID
+                HasReceiptGetter = () => IsPurchased,
+                ReceiptGetter = () => GetOrder()?.Info.Receipt ?? string.Empty,
+                TransactionIdGetter = () => GetOrder()?.Info.TransactionID ?? string.Empty
             };
 
             Metadata = new()
@@ -24,87 +30,33 @@ namespace LittleBit.Modules.IAppModule.Data.ProductWrappers
                 LocalizedPrice = product.metadata.localizedPrice,
                 LocalizedPriceString = product.metadata.localizedPriceString,
                 LocalizedTitle = product.metadata.localizedTitle,
-                CanPurchaseGetter = () =>
-                    Definition.Type.Equals(ProductType.Consumable) ||
-                    !Metadata.IsPurchasedGetter.Invoke(),
-                IsPurchasedGetter = () => TransactionData.HasReceipt ||
-                                          !string.IsNullOrEmpty(TransactionData.Receipt) ||
+                
+                CanPurchaseGetter = () => Definition.Type == ProductType.Consumable || !IsPurchased,
+                IsPurchasedGetter = () => IsPurchasedInPrefs || 
+                                          !string.IsNullOrEmpty(TransactionData.Receipt) || 
                                           !string.IsNullOrEmpty(TransactionData.TransactionId)
             };
+        }
 
-            Definition = new()
-            {
-                Id = product.definition.id,
-                Type = product.definition.type
-            };
-        }
-        
-        public RuntimeProductWrapper(ProductParams product)
-        {
-            TransactionData = new()
-            {
-                HasReceiptGetter = () => product.HasReceipt,
-                ReceiptGetter = () => product.Receipt,
-                TransactionIdGetter = () => product.TransactionId
-            };
+        private bool IsPurchased => Metadata.IsPurchasedGetter();
+        private bool IsPurchasedInPrefs => PlayerPrefs.GetInt(Definitions.PurchasedPrefsPrefix + Definition.Id, 0) > 0;
 
-            Metadata = new()
-            {
-                CurrencyCode = product.CurrencyCode,
-                CurrencySymbol = CurrencyCodeMapper.GetSymbol(product.CurrencyCode),
-                LocalizedDescription = product.LocalizedDescription,
-                LocalizedPrice = product.LocalizedPrice,
-                LocalizedPriceString = product.LocalizedPriceString,
-                LocalizedTitle = product.LocalizedTitle,
-                CanPurchaseGetter = () =>
-                    Definition.Type.Equals(ProductType.Consumable) ||
-                    !Metadata.IsPurchasedGetter.Invoke(),
-                IsPurchasedGetter = () => PlayerPrefs.GetInt("MixPurchaseProduct"+Definition.Id,0)>0
-            };
+        private Order GetOrder()
+        {
+            if (_controller == null) return null;
+            
+            var purchases = _controller.GetPurchases();
+            return purchases.FirstOrDefault(order => 
+                order.CartOrdered.Items().Any(p => p.Product.definition.id == Definition.Id));
+        }
 
-            Definition = new()
-            {
-                Id = product.Id,
-                Type = ConvertProductType(product.Type)
-            };
-        }
-        private ProductType ConvertProductType(int itemType)
-        {
-            switch (itemType)
-            {
-                case 0: { return ProductType.Consumable;    }
-                case 1: { return ProductType.NonConsumable; }
-                case 2: { return  ProductType.Subscription; }
-                default: {
-                    Debug.LogErrorFormat("Can not find the itemType:{0};", itemType);
-                    return ProductType.Consumable;
-                }
-            }
-        }
-        public void Purchase()
-        {
-            PlayerPrefs.SetInt("MixPurchaseProduct"+Definition.Id,1);
-        }
-    }
-    public class ProductParams
-    {
-        public string Id;
-        public bool HasReceipt = true;
-        public string Receipt = "Receipt";
-        public string TransactionId = "TransactionId";
-        public string CurrencyCode = "USD";
-        public string CurrencySymbol = "$";
-        public string LocalizedDescription = "LocalizedDescription";
-        public decimal LocalizedPrice = 10;
-        public string LocalizedPriceString = "LocalizedPriceString";
-        public string LocalizedTitle = "LocalizedTitle";
-        public int Type = 0;
 
-        public ProductParams(string id, int type, decimal price)
+
+        internal void Purchase()
         {
-            Id = id;
-            Type = type;
-            LocalizedPrice = price;
+            PlayerPrefs.SetInt(Definitions.PurchasedPrefsPrefix + Definition.Id, 1);
+            PlayerPrefs.Save();
         }
+
     }
 }

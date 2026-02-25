@@ -16,5 +16,7 @@ namespace LittleBit.Modules.IAppModule.Services
         public void Purchase(string id, bool freePurchase = false);
         public void RestorePurchasedProducts();
         public IProductWrapper GetProductWrapper(string id);
+        
+        
     }
 }

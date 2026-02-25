@@ -8,6 +8,6 @@ namespace LittleBit.Modules.IAppModule.Data.ProductWrappers
         
         public Metadata Metadata { get; }
         public Definition Definition { get; }
-        
+
     }
 }

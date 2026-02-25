@@ -11,123 +11,126 @@ namespace LittleBit.Modules.IAppModule.Services.PurchaseProcessors
 {
     public class CrossPlatformPurchaseHandler : IPurchaseHandler
     {
-        private readonly CrossPlatformTangles _crossPlatformTangles;
         
+        
+        
+        private readonly CrossPlatformTangles _crossPlatformTangles;
+
         public CrossPlatformPurchaseHandler(CrossPlatformTangles crossPlatformTangles)
         {
             _crossPlatformTangles = crossPlatformTangles;
         }
         
-        public PurchaseProcessingResult ProcessPurchase(PurchaseEventArgs args,
+        
+        
+        private CrossPlatformValidator CreateValidator()
+        {
+#if DEBUG_STOREKIT_TEST
+            return new CrossPlatformValidator(_crossPlatformTangles.GetGoogleData(),
+                _crossPlatformTangles.GetAppleTestData(), Application.identifier);
+#else
+            return new CrossPlatformValidator(_crossPlatformTangles.GetGoogleData(),
+                _crossPlatformTangles.GetAppleData(), Application.identifier);
+#endif
+        }
+        
+        
+        
+
+        public void ProcessPurchase(PendingOrder pendingOrder, Product product,
             Action<bool, RecieptHandler> callback)
         {
             bool validPurchase = false;
-            Dictionary<string, object> wrapper = null;
             
             TextAsset jsonFile = Resources.Load<TextAsset>("BillingMode");
 
-            if (jsonFile != null)
+            if (jsonFile == null)
             {
-                BillingModeData billingModeData = JsonUtility.FromJson<BillingModeData>(jsonFile.text);
+                Debug.LogError($"[IAP] Failed to load BillingMode from resources.");
+                callback?.Invoke(false, null);
+                return;
+            }
 
-                Debug.LogError("Store is " + billingModeData.androidStore);
-                
-                wrapper = Json.Deserialize(args.purchasedProduct.receipt) as Dictionary<string, object>;
-                
-                if (billingModeData.androidStore.Equals("AmazonAppStore"))
+            BillingModeData billingModeData = JsonUtility.FromJson<BillingModeData>(jsonFile.text);
+            Debug.Log("Store is " + billingModeData.androidStore);
+            
+            Dictionary<string, object> wrapper = Json.Deserialize(pendingOrder.Info.Receipt) as Dictionary<string, object>;
+            var receiptHandler = new RecieptHandler(wrapper);
+            
+            if (billingModeData.androidStore.Equals("AmazonAppStore"))
+                validPurchase = true; // Amazon не требует локальной валидации через Tangles
+            else
+                validPurchase = ValidateWithTangles(product, pendingOrder);
+            
+            if (product.definition.type == ProductType.NonConsumable)
+            {
+                bool isFirstTime = validPurchase && PlayerPrefs.GetInt(Definitions.PurchasedPrefsPrefix + product.definition.id, 0) == 0;
+                callback?.Invoke(isFirstTime, receiptHandler);
+            }
+            else
+            {
+                callback?.Invoke(validPurchase, receiptHandler);
+            }
+
+            // Записываем флаг только если покупка действительно валидна
+            if (validPurchase)
+            {
+                PlayerPrefs.SetInt(Definitions.PurchasedPrefsPrefix + product.definition.id, 1);
+            }
+        }
+        
+        
+        
+        /// <summary>
+        /// Выполняет проверку чека через кроссплатформенный валидатор Unity.
+        /// </summary>
+        private bool ValidateWithTangles(Product product, PendingOrder pendingOrder)
+        {
+            try
+            {
+                var validator = CreateValidator();
+                var purchaseReceipts = validator.Validate(pendingOrder.Info.Receipt);
+
+                foreach (var productReceipt in purchaseReceipts)
                 {
-                    validPurchase = true;
-                }
-                else
-                {
-                    try
+                    // Логика для Google Play
+                    if (productReceipt is GooglePlayReceipt google)
                     {
-        #if DEBUG_STOREKIT_TEST
-                        var validator = new CrossPlatformValidator(_crossPlatformTangles.GetGoogleData(),
-                            _crossPlatformTangles.GetAppleTestData(), Application.identifier);
-                         
-        #else
-                        var validator =
-                            new CrossPlatformValidator(_crossPlatformTangles.GetGoogleData(),
-                                _crossPlatformTangles.GetAppleData(), Application.identifier);
-        #endif
-                        
-                        var purchaseReciepts = validator.Validate(args.purchasedProduct.receipt);
-
-                        foreach (var productReceipt in purchaseReciepts)
+                        // Сравнение данных из чека с данными заказа v5
+                        if (string.Equals(pendingOrder.Info.TransactionID, google.purchaseToken) &&
+                            string.Equals(product.definition.storeSpecificId, google.productID))
                         {
-                            GooglePlayReceipt google = productReceipt as GooglePlayReceipt;
-                            
-                            if (null != google)
-                            {
-                                if (string.Equals(args.purchasedProduct.transactionID,google.purchaseToken) &&
-                                    string.Equals(args.purchasedProduct.definition.storeSpecificId, google.productID))
-                                {
-                                    validPurchase = true;
-                                }
-
-                                if ((int) google.purchaseState == 4)
-                                {
-                                    Debug.Log("Deferred IAP, Not bought yet!");
-                                    return PurchaseProcessingResult.Pending;
-                                }
-                                //
-                                // Debug.Log(" product transactionID " + args.purchasedProduct.transactionID);
-                                // Debug.Log(" product definition.id " + args.purchasedProduct.definition.id);
-                                // Debug.Log(" product definition.storeSpecificId" + args.purchasedProduct.definition.storeSpecificId);
-                                // Debug.Log(" google productID " + google.productID);
-                                // Debug.Log(" google transactionID " + google.transactionID);
-                                // Debug.Log(" google purchaseState " + google.purchaseState);
-                                // Debug.Log(" google purchaseToken " + google.purchaseToken);
-                            }
-
-                            AppleInAppPurchaseReceipt apple = productReceipt as AppleInAppPurchaseReceipt;
-                            if (null != apple)
-                            {
-                                if (args.purchasedProduct.appleProductIsRestored || 
-                                    (string.Equals(args.purchasedProduct.definition.storeSpecificId, apple.productID) &&
-                                     string.Equals(args.purchasedProduct.transactionID, apple.transactionID)))
-                                {
-                                    validPurchase = true;
-                                }
-                                
-                                // Debug.Log(" validPurchase " + validPurchase);
-                                // Debug.Log(" product transactionID " + args.purchasedProduct.transactionID);
-                                // Debug.Log(" product definition.id " + args.purchasedProduct.definition.id);
-                                // Debug.Log(" product is restored "  + args.purchasedProduct.appleProductIsRestored);
-                                // Debug.Log(" product definition.storeSpecificId " + args.purchasedProduct.definition.storeSpecificId);
-                                // Debug.Log(" apple transactionID " + apple.transactionID);
-                                // Debug.Log(" apple transaction originalTransactionIdentifier " + apple.originalTransactionIdentifier);
-                                // Debug.Log(" apple transaction subscriptionExpirationDate " + apple.subscriptionExpirationDate);
-                                // Debug.Log(" apple transaction cancellationDate " + apple.cancellationDate);
-                                // Debug.Log(" apple transaction quantity "  + apple.quantity);
-                            }
+                            // Состояние 4 означает отложенный платеж (Deferred)
+                            if ((int)google.purchaseState == 4) return false;
+                            return true;
                         }
                     }
-            
-                    catch (Exception e)
-                    {
-                        Debug.LogError("Invalid receipt!");
 
-                        callback?.Invoke(false, null);
+                    // Логика для Apple
+                    if (productReceipt is AppleInAppPurchaseReceipt apple)
+                    {
+                        // ИСПРАВЛЕНИЕ: В v5 мы убираем appleProductIsRestored. 
+                        // Валидация считается успешной при совпадении ID продукта и ID транзакции.
+                        // TransactionID берется из pendingOrder.Info
+                        
+                        if (string.Equals(product.definition.storeSpecificId, apple.productID) &&
+                            string.Equals(pendingOrder.Info.TransactionID, apple.transactionID))
+                        {
+                            return true;
+                        }
                     }
                 }
             }
-            else
+            catch (IAPSecurityException e) // Специфичное исключение для проблем с чеком
             {
-                Debug.LogError("Failed to load JSON file from resources.");
+                Debug.LogError($"[IAP] Security exception: {e.Message}");
             }
-            
-            
-            
-            if(args.purchasedProduct.definition.type == ProductType.NonConsumable)
-                callback?.Invoke(validPurchase && PlayerPrefs.GetInt(args.purchasedProduct.definition.id, 0) == 0, new RecieptHandler(wrapper));
-            else
-                callback?.Invoke(validPurchase, new RecieptHandler(wrapper));
-            
-            PlayerPrefs.SetInt(args.purchasedProduct.definition.id, 1);
-            
-            return PurchaseProcessingResult.Complete;
+            catch (Exception e)
+            {
+                Debug.LogError($"[IAP] Unknown validation exception: {e.Message}");
+            }
+
+            return false;
         }
     }
 }
